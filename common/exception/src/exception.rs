@@ -153,6 +153,7 @@ build_exceptions! {
     BadBytes(46),
     InitPrometheusFailure(47),
     ScalarSubqueryBadRows(48),
+    UnknownQueryClusterNode(49),
 
 
     // uncategorized
@@ -318,6 +319,12 @@ impl From<sqlparser::parser::ParserError> for ErrorCode {
 
 impl From<std::io::Error> for ErrorCode {
     fn from(error: std::io::Error) -> Self {
+        ErrorCode::from_std_error(error)
+    }
+}
+
+impl From<ureq::Error> for ErrorCode {
+    fn from(error: ureq::Error) -> Self {
         ErrorCode::from_std_error(error)
     }
 }

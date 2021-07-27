@@ -8,9 +8,15 @@ use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Acquire;
 use std::sync::Arc;
 
+use common_arrow::arrow_flight::flight_service_client::FlightServiceClient;
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_flights::Address;
+use common_flights::ConnectionFactory;
 use common_infallible::RwLock;
+use common_management::cluster::ClusterManager;
+use common_management::cluster::ClusterManagerRef;
+use common_management::cluster::ClusterExecutor;
 use common_planners::Part;
 use common_planners::Partitions;
 use common_planners::PlanNode;
@@ -23,12 +29,13 @@ use common_streams::SendableDataBlockStream;
 
 use crate::catalog::utils::TableFunctionMeta;
 use crate::catalog::utils::TableMeta;
-use crate::clusters::ClusterRef;
 use crate::configs::Config;
 use crate::datasources::DatabaseCatalog;
 use crate::sessions::context_shared::FuseQueryContextShared;
 use crate::sessions::ProcessInfo;
 use crate::sessions::Settings;
+use crate::api::FlightClient;
+use std::time::Duration;
 
 pub struct FuseQueryContext {
     statistics: Arc<RwLock<Statistics>>,
@@ -129,8 +136,19 @@ impl FuseQueryContext {
         Ok(())
     }
 
-    pub fn try_get_cluster(&self) -> Result<ClusterRef> {
-        self.shared.try_get_cluster()
+    pub fn try_get_executors(&self) -> Result<Vec<Arc<ClusterExecutor>>> {
+        self.shared.try_get_executors()
+    }
+
+    pub fn try_get_executor_by_name(&self, name: &str) -> Result<Arc<ClusterExecutor>> {
+        self.shared.try_get_executor_by_name(name)
+    }
+
+    /// Get the flight client from address.
+    pub async fn get_flight_client(&self, address: Address) -> Result<FlightClient> {
+        let address = address.to_string().clone();
+        let channel = ConnectionFactory::create_flight_channel(address, None).await;
+        channel.map(|channel| FlightClient::new(FlightServiceClient::new(channel)))
     }
 
     pub fn get_datasource(&self) -> Arc<DatabaseCatalog> {

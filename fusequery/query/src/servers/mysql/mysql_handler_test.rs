@@ -18,8 +18,9 @@ use mysql::Conn;
 use mysql::FromRowError;
 use mysql::Row;
 
+use crate::configs::Config;
 use crate::servers::MySQLHandler;
-use crate::sessions::SessionManager;
+use crate::sessions::SessionMgr;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_use_database_with_on_query() -> Result<()> {

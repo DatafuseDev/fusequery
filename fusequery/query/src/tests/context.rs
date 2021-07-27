@@ -19,12 +19,12 @@ pub fn try_create_context() -> Result<FuseQueryContextRef> {
     let cluster = Cluster::empty();
 
     // Setup log dir to the tests directory.
-    config.log_dir = env::current_dir()?
+    conf.log_dir = env::current_dir()?
         .join("../../tests/data/logs")
         .display()
         .to_string();
 
-    let sessions = SessionManager::from_conf(config, cluster)?;
+    let sessions = SessionManager::from_conf(config, cluster, ClusterClient::create("local"))?;
     let test_session = sessions.create_session("TestSession")?;
     let test_context = test_session.create_context();
     test_context.get_settings().set_max_threads(8)?;
@@ -65,7 +65,7 @@ pub fn try_create_cluster_context(nodes: &[ClusterNode]) -> Result<FuseQueryCont
         .unwrap()?;
     }
 
-    let sessions = SessionManager::from_conf(config, cluster)?;
+    let sessions = SessionManager::from_conf(config, cluster, ClusterClient::create("local"))?;
     let test_session = sessions.create_session("TestSession")?;
     let test_context = test_session.create_context();
     test_context.get_settings().set_max_threads(8)?;

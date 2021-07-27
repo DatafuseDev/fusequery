@@ -12,22 +12,20 @@ use common_runtime::tokio::task::JoinHandle;
 use futures::Future;
 
 use crate::api::http::router::Router;
-use crate::clusters::ClusterRef;
 use crate::configs::Config;
 use crate::servers::Server;
+use crate::sessions::SessionManagerRef;
 
 pub struct HttpService {
-    cfg: Config,
-    cluster: ClusterRef,
+    sessions: SessionManagerRef,
     abort_notify: Arc<Notify>,
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl HttpService {
-    pub fn create(cfg: Config, cluster: ClusterRef) -> Box<dyn Server> {
+    pub fn create(sessions: SessionManagerRef) -> Box<dyn Server> {
         Box::new(HttpService {
-            cfg,
-            cluster,
+            sessions,
             abort_notify: Arc::new(Notify::new()),
             join_handle: None,
         })
@@ -57,8 +55,8 @@ impl Server for HttpService {
     }
 
     async fn start(&mut self, listening: SocketAddr) -> Result<SocketAddr> {
-        let router = Router::create(self.cfg.clone(), self.cluster.clone());
-        let server = warp::serve(router.router()?);
+        let router = Router::create(self.sessions.clone());
+        let server = warp::serve(router.build()?);
 
         let conf = self.cfg.clone();
         let tls_cert = conf.tls_server_cert;

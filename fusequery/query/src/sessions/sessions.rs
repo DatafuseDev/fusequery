@@ -17,17 +17,17 @@ use common_runtime::tokio::sync::mpsc::Receiver;
 use futures::future::Either;
 use metrics::counter;
 
-use crate::clusters::Cluster;
-use crate::clusters::ClusterRef;
-use crate::configs::Config;
+use crate::datasources::DataSource;
+use crate::configs::{Config, ConfigExtractor};
 use crate::datasources::DatabaseCatalog;
 use crate::sessions::session::Session;
 use crate::sessions::session_ref::SessionRef;
+use common_management::cluster::{ClusterExecutor, ClusterManagerRef, ClusterManager};
 
 pub struct SessionManager {
     pub(in crate::sessions) conf: Config,
-    pub(in crate::sessions) cluster: ClusterRef,
     pub(in crate::sessions) datasource: Arc<DatabaseCatalog>,
+    pub(in crate::sessions) cluster_manager: ClusterManagerRef,
 
     pub(in crate::sessions) max_sessions: usize,
     pub(in crate::sessions) active_sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
@@ -36,33 +36,15 @@ pub struct SessionManager {
 pub type SessionManagerRef = Arc<SessionManager>;
 
 impl SessionManager {
-    pub fn try_create(max_mysql_sessions: u64) -> Result<SessionManagerRef> {
-        Ok(Arc::new(SessionManager {
-            conf: Config::default(),
-            cluster: Cluster::empty(),
-            datasource: Arc::new(DatabaseCatalog::try_create()?),
-
-            max_sessions: max_mysql_sessions as usize,
-            active_sessions: Arc::new(RwLock::new(HashMap::with_capacity(
-                max_mysql_sessions as usize,
-            ))),
-        }))
-    }
-
-    pub fn from_conf(conf: Config, cluster: ClusterRef) -> Result<SessionManagerRef> {
+    pub fn from_conf(conf: Config) -> Result<SessionManagerRef> {
         let max_active_sessions = conf.max_active_sessions as usize;
         Ok(Arc::new(SessionManager {
             conf,
-            cluster,
-            datasource: Arc::new(DatabaseCatalog::try_create()?),
-
             max_sessions: max_active_sessions,
+            datasource: Arc::new(DatabaseCatalog::try_create()?),
+            cluster_manager: ClusterManager::from_conf(conf.extract_cluster()),
             active_sessions: Arc::new(RwLock::new(HashMap::with_capacity(max_active_sessions))),
         }))
-    }
-
-    pub fn get_cluster(self: &Arc<Self>) -> ClusterRef {
-        self.cluster.clone()
     }
 
     pub fn get_datasource(self: &Arc<Self>) -> Arc<DatabaseCatalog> {
@@ -161,5 +143,25 @@ impl SessionManager {
                 false
             }
         }
+    }
+
+    pub fn get_conf(self: &Arc<Self>) -> Config {
+        self.conf.clone()
+    }
+
+    pub fn get_cluster_manager(self: &Arc<Self>) -> ClusterManagerRef {
+        self.cluster_manager.clone()
+    }
+
+    pub fn try_get_executors(self: &Arc<Self>) -> Result<Vec<Arc<ClusterExecutor>>> {
+        Err(ErrorCode::UnImplement(""))
+    }
+
+    pub fn register_executor(self: &Arc<Self>) -> Result<()> {
+        Err(ErrorCode::UnImplement(""))
+    }
+
+    pub fn unregister_executor(self: &Arc<Self>) -> Result<()> {
+        Err(ErrorCode::UnImplement(""))
     }
 }

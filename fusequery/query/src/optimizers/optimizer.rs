@@ -12,7 +12,7 @@ use crate::optimizers::ProjectionPushDownOptimizer;
 use crate::optimizers::StatisticsExactOptimizer;
 use crate::sessions::FuseQueryContextRef;
 
-pub trait Optimizer {
+pub trait Optimizer: Send + Sync {
     fn name(&self) -> &str;
     fn optimize(&mut self, plan: &PlanNode) -> Result<PlanNode>;
 }
