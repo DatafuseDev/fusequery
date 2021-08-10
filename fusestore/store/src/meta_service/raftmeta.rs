@@ -920,16 +920,9 @@ impl MetaNode {
         if ver <= lower_bound {
             None
         } else {
-            let dbs = sm
-                .get_databases()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<Vec<_>>();
-            let tbls = sm
-                .tables
-                .iter()
-                .map(|(k, v)| (*k, v.clone()))
-                .collect::<Vec<_>>();
+            let dbs = sm.get_databases();
+            let tbls = sm.get_tables();
+
             Some((ver.unwrap_or(0), dbs, tbls))
         }
     }
@@ -960,19 +953,19 @@ impl MetaNode {
         append_res: &AppendResult,
     ) {
         let mut sm = self.sto.state_machine.write().await;
-        sm.append_data_parts(db_name, table_name, append_res)
+        sm.append_data_parts(db_name, table_name, append_res).await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn remove_table_data_parts(&self, db_name: &str, table_name: &str) {
         let mut sm = self.sto.state_machine.write().await;
-        sm.remove_table_data_parts(db_name, table_name)
+        sm.remove_table_data_parts(db_name, table_name).await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn remove_db_data_parts(&self, db_name: &str) {
         let mut sm = self.sto.state_machine.write().await;
-        sm.remove_db_data_parts(db_name)
+        sm.remove_db_data_parts(db_name).await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

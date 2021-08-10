@@ -38,6 +38,20 @@ impl fmt::Display for Database {
     }
 }
 
+impl Database {
+    pub fn deserialize_from_vec(v: &[u8]) -> Option<Self> {
+        let db: Result<Database, Box<bincode::ErrorKind>> = bincode::deserialize(v);
+        if let Ok(db) = db {
+            return Some(db);
+        }
+        None
+    }
+
+    pub fn serialize_into_vec(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 pub struct Table {
     pub table_id: u64,
@@ -52,6 +66,20 @@ pub struct Table {
 impl fmt::Display for Table {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "table id: {}", self.table_id)
+    }
+}
+
+impl Table {
+    pub fn deserialize_from_vec(v: &[u8]) -> Option<Self> {
+        let table: Result<Table, Box<bincode::ErrorKind>> = bincode::deserialize(v);
+        if let Ok(table) = table {
+            return Some(table);
+        }
+        None
+    }
+
+    pub fn serialize_into_vec(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap()
     }
 }
 

@@ -17,6 +17,7 @@ use common_exception::ToErrorCode;
 use common_flights::storage_api_impl::AppendResult;
 use common_flights::storage_api_impl::DataPartInfo;
 use common_metatypes::Database;
+use common_metatypes::MatchSeq;
 use common_metatypes::MatchSeqExt;
 use common_metatypes::SeqValue;
 use common_metatypes::Table;
@@ -56,6 +57,9 @@ const SEQ_DATABASE_META_ID: &str = "database_meta_id";
 // const TREE_NODES: &str = "nodes";
 // const TREE_META: &str = "meta";
 const TREE_STATE_MACHINE: &str = "state_machine";
+
+const DB_PREFIX: &str = "df_db_";
+const TBL_PREFIX: &str = "df_table_";
 
 /// Replication defines the replication strategy.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -106,12 +110,6 @@ pub struct StateMachine {
     pub slots: Vec<Slot>,
 
     pub replication: Replication,
-
-    /// db name to database mapping
-    pub databases: BTreeMap<String, Database>,
-
-    /// table id to table mapping
-    pub tables: BTreeMap<u64, Table>,
 
     /// table parts， table id -> data parts
     pub table_parts: HashMap<u64, Vec<DataPartInfo>>,
@@ -208,8 +206,6 @@ impl StateMachine {
             slots: Vec::new(),
 
             replication: Replication::Mirror(1),
-            databases: BTreeMap::new(),
-            tables: BTreeMap::new(),
             table_parts: HashMap::new(),
         };
 
@@ -402,34 +398,48 @@ impl StateMachine {
             Cmd::CreateDatabase { ref name, .. } => {
                 // - If the db present, return it.
                 // - Otherwise, create a new one with next seq number as database id, and add it in to store.
-                if self.databases.contains_key(name) {
-                    let prev = self.databases.get(name);
-                    Ok((prev.cloned(), prev.cloned()).into())
+
+                // TODO(ariesdevil): move to upper level and check name already include prefix.
+                let name: &String = &[DB_PREFIX, name].join("");
+                let db = self.get_database(name);
+                if db.is_some() {
+                    Ok((db.clone(), db).into())
                 } else {
                     let db = Database {
                         database_id: self.incr_seq(SEQ_DATABASE_ID),
-                        tables: Default::default(),
+                        tables: HashMap::new(),
                     };
                     self.incr_seq(SEQ_DATABASE_META_ID);
+                    let db_vec = db.serialize_into_vec();
 
-                    self.databases.insert(name.clone(), db.clone());
+                    let (prev, result) =
+                        self.upsert_kv(name, &MatchSeq::Any, &Some(db_vec)).await?;
+                    let de_database = |r: Option<SeqValue>| -> Option<Database> {
+                        if let Some(r) = r {
+                            Database::deserialize_from_vec(&r.1)
+                        } else {
+                            None::<Database>
+                        }
+                    };
                     tracing::debug!("applied CreateDatabase: {}={:?}", name, db);
-
-                    Ok((None, Some(db)).into())
+                    Ok((de_database(prev), de_database(result)).into())
                 }
             }
 
             Cmd::DropDatabase { ref name } => {
-                let prev = self.databases.get(name).cloned();
-                if prev.is_some() {
-                    self.remove_db_data_parts(name);
-                    self.databases.remove(name);
-                    self.incr_seq(SEQ_DATABASE_META_ID);
-                    tracing::debug!("applied DropDatabase: {}", name);
-                    Ok((prev, None).into())
-                } else {
-                    Ok((None::<Database>, None::<Database>).into())
-                }
+                let name: &String = &[DB_PREFIX, name].join("");
+                let (prev, result) = self.upsert_kv(name, &MatchSeq::Any, &None).await?;
+                self.remove_db_data_parts(name).await;
+                self.incr_seq(SEQ_DATABASE_META_ID);
+                let de_database = |r: Option<SeqValue>| -> Option<Database> {
+                    if let Some(r) = r {
+                        Database::deserialize_from_vec(&r.1)
+                    } else {
+                        None::<Database>
+                    }
+                };
+                tracing::debug!("applied DropDatabase: {}", name);
+                Ok((de_database(prev), de_database(result)).into())
             }
 
             Cmd::CreateTable {
@@ -438,13 +448,13 @@ impl StateMachine {
                 if_not_exists: _,
                 ref table,
             } => {
-                let db = self.databases.get(db_name);
-                let mut db = db.unwrap().to_owned();
+                let db_name: &String = &[DB_PREFIX, db_name].join("");
+                let mut db = self.get_database(db_name).unwrap();
 
                 if db.tables.contains_key(table_name) {
                     let table_id = db.tables.get(table_name).unwrap();
-                    let prev = self.tables.get(table_id);
-                    Ok((prev.cloned(), prev.cloned()).into())
+                    let prev = self.get_table(table_id);
+                    Ok((prev.clone(), prev).into())
                 } else {
                     let table = Table {
                         table_id: self.incr_seq(SEQ_TABLE_ID),
@@ -453,11 +463,22 @@ impl StateMachine {
                     };
                     self.incr_seq(SEQ_DATABASE_META_ID);
                     db.tables.insert(table_name.clone(), table.table_id);
-                    self.databases.insert(db_name.clone(), db);
-                    self.tables.insert(table.table_id, table.clone());
+                    self.upsert_kv(db_name, &MatchSeq::Any, &Some(db.serialize_into_vec()))
+                        .await?;
+                    let table_key: &String = &[TBL_PREFIX, &table.table_id.to_string()].join("");
+                    let (prev, result) = self
+                        .upsert_kv(table_key, &MatchSeq::Any, &Some(table.serialize_into_vec()))
+                        .await?;
+                    let de_table = |r: Option<SeqValue>| -> Option<Table> {
+                        if let Some(r) = r {
+                            Table::deserialize_from_vec(&r.1)
+                        } else {
+                            None::<Table>
+                        }
+                    };
                     tracing::debug!("applied CreateTable: {}={:?}", table_name, table);
 
-                    Ok((None, Some(table)).into())
+                    Ok((de_table(prev), de_table(result)).into())
                 }
             }
 
@@ -466,18 +487,30 @@ impl StateMachine {
                 ref table_name,
                 if_exists: _,
             } => {
-                let db = self.databases.get_mut(db_name).unwrap();
+                let db_name: &String = &[DB_PREFIX, db_name].join("");
+                let mut db = self.get_database(db_name).unwrap();
                 let tbl_id = db.tables.get(table_name);
                 if let Some(tbl_id) = tbl_id {
                     let tbl_id = tbl_id.to_owned();
                     db.tables.remove(table_name);
-                    let prev = self.tables.remove(&tbl_id);
+                    self.upsert_kv(db_name, &MatchSeq::Any, &Some(db.serialize_into_vec()))
+                        .await?;
+                    let table_key: &String = &[TBL_PREFIX, &tbl_id.to_string()].join("");
+                    let (prev, result) = self.upsert_kv(table_key, &MatchSeq::Any, &None).await?;
 
-                    self.remove_table_data_parts(db_name, table_name);
+                    self.remove_table_data_parts(db_name, table_name).await;
+
+                    let de_table = |r: Option<SeqValue>| -> Option<Table> {
+                        if let Some(r) = r {
+                            Table::deserialize_from_vec(&r.1)
+                        } else {
+                            None::<Table>
+                        }
+                    };
 
                     self.incr_seq(SEQ_DATABASE_META_ID);
 
-                    Ok((prev, None).into())
+                    Ok((de_table(prev), de_table(result)).into())
                 } else {
                     Ok((None::<Table>, None::<Table>).into())
                 }
@@ -488,31 +521,41 @@ impl StateMachine {
                 ref seq,
                 ref value,
             } => {
-                // TODO(xp): need to be done all in a tx
-                let kvs = self.kvs();
-
-                let prev = kvs.get(key)?;
-                if seq.match_seq(&prev).is_err() {
-                    return Ok((prev.clone(), prev).into());
-                }
-
-                let record_value = if let Some(v) = value {
-                    let new_seq = self.incr_seq(SEQ_GENERIC_KV);
-
-                    let record_value = (new_seq, v.clone());
-                    kvs.insert(key, &record_value).await?;
-
-                    Some(record_value)
-                } else {
-                    kvs.remove(key, true).await?;
-
-                    None
-                };
-
-                tracing::debug!("applied UpsertKV: {} {:?}", key, record_value);
-                Ok((prev, record_value).into())
+                let (prev, result) = self.upsert_kv(key, seq, value).await?;
+                Ok((prev, result).into())
             }
         }
+    }
+
+    pub async fn upsert_kv(
+        &mut self,
+        key: &str,
+        seq: &MatchSeq,
+        value: &Option<Vec<u8>>,
+    ) -> common_exception::Result<(Option<SeqValue>, Option<SeqValue>)> {
+        let kvs = self.kvs();
+
+        let k = &key.to_string();
+        let prev = kvs.get(k)?;
+        if seq.match_seq(&prev).is_err() {
+            return Ok((prev.clone(), prev));
+        }
+
+        let record_value = if let Some(v) = value {
+            let new_seq = self.incr_seq(SEQ_GENERIC_KV);
+
+            let record_value = (new_seq, v.clone());
+            kvs.insert(k, &record_value).await?;
+
+            Some(record_value)
+        } else {
+            kvs.remove(k, true).await?;
+
+            None
+        };
+
+        tracing::debug!("applied UpsertKV: {} {:?}", key, record_value);
+        Ok((prev, record_value))
     }
 
     /// Initialize slots by assign nodes to everyone of them randomly, according to replicationn config.
@@ -568,12 +611,31 @@ impl StateMachine {
     }
 
     pub fn get_database(&self, name: &str) -> Option<Database> {
-        let x = self.databases.get(name);
-        x.cloned()
+        let name = if name.starts_with(DB_PREFIX) {
+            name.to_string()
+        } else {
+            let tmp: String = [DB_PREFIX, name].join("");
+            tmp
+        };
+        let seq_value = self.get_kv(&name);
+        if let Some(sv) = seq_value {
+            return Database::deserialize_from_vec(&sv.1);
+        }
+        None
     }
 
-    pub fn get_databases(&self) -> &BTreeMap<String, Database> {
-        &self.databases
+    pub fn get_databases(&self) -> Vec<(String, Database)> {
+        let r = self.prefix_list_kv(DB_PREFIX);
+        r.iter()
+            .map(|v| {
+                let db_name = v.0.clone();
+                let db_name = db_name.strip_prefix(DB_PREFIX);
+                (
+                    db_name.unwrap().to_string(),
+                    Database::deserialize_from_vec(&v.1 .1).unwrap(),
+                )
+            })
+            .collect()
     }
 
     pub fn get_database_meta_ver(&self) -> Option<u64> {
@@ -585,8 +647,29 @@ impl StateMachine {
     }
 
     pub fn get_table(&self, tid: &u64) -> Option<Table> {
-        let x = self.tables.get(tid);
-        x.cloned()
+        let table_key: &String = &[TBL_PREFIX, &tid.to_string()].join("");
+
+        let v = self.get_kv(table_key);
+        if let Some(v) = v {
+            return Table::deserialize_from_vec(&v.1);
+        }
+        None
+    }
+
+    pub fn get_tables(&self) -> Vec<(u64, Table)> {
+        let r = self.prefix_list_kv(TBL_PREFIX);
+        r.iter()
+            .map(|v| {
+                let tbl_key = v.0.clone();
+                let tbl_id = tbl_key
+                    .strip_prefix(TBL_PREFIX)
+                    .map(|t| t.parse::<u64>().unwrap());
+                (
+                    tbl_id.unwrap(),
+                    Table::deserialize_from_vec(&v.1 .1).unwrap(),
+                )
+            })
+            .collect()
     }
 
     pub fn get_kv(&self, key: &str) -> Option<SeqValue> {
@@ -596,7 +679,13 @@ impl StateMachine {
     }
 
     pub fn get_data_parts(&self, db_name: &str, table_name: &str) -> Option<Vec<DataPartInfo>> {
-        let db = self.databases.get(db_name);
+        let db_name = if db_name.starts_with(DB_PREFIX) {
+            db_name.to_string()
+        } else {
+            let tmp: String = [DB_PREFIX, db_name].join("");
+            tmp
+        };
+        let db = self.get_database(&db_name);
         if let Some(db) = db {
             let table_id = db.tables.get(table_name);
             if let Some(table_id) = table_id {
@@ -606,7 +695,7 @@ impl StateMachine {
         None
     }
 
-    pub fn append_data_parts(
+    pub async fn append_data_parts(
         &mut self,
         db_name: &str,
         table_name: &str,
@@ -627,13 +716,18 @@ impl StateMachine {
             })
             .collect::<Vec<_>>();
 
-        let db = self.databases.get(db_name);
+        let db_name: &str = &[DB_PREFIX, db_name].join("");
+        let db = self.get_database(db_name);
         if let Some(db) = db {
             let table_id = db.tables.get(table_name);
             if let Some(table_id) = table_id {
                 for part in part_infos {
-                    let table = self.tables.get_mut(table_id).unwrap();
+                    let mut table = self.get_table(table_id).unwrap();
                     table.parts.insert(part.part.name.clone());
+                    let table_key: &String = &[TBL_PREFIX, &table_id.to_string()].join("");
+                    self.upsert_kv(table_key, &MatchSeq::Any, &Some(table.serialize_into_vec()))
+                        .await
+                        .unwrap();
                     // These comments are intentionally left here.
                     // As rustc not smart enough, it says:
                     // for part in part_infos {
@@ -666,23 +760,49 @@ impl StateMachine {
         }
     }
 
-    pub fn remove_table_data_parts(&mut self, db_name: &str, table_name: &str) {
-        let db = self.databases.get(db_name);
+    pub async fn remove_table_data_parts(&mut self, db_name: &str, table_name: &str) {
+        let db_name = if db_name.starts_with(DB_PREFIX) {
+            db_name.to_string()
+        } else {
+            let tmp: String = [DB_PREFIX, db_name].join("");
+            tmp
+        };
+        let db = self.get_database(&db_name);
         if let Some(db) = db {
             let table_id = db.tables.get(table_name);
             if let Some(table_id) = table_id {
-                self.tables.entry(*table_id).and_modify(|t| t.parts.clear());
-                self.table_parts.remove(table_id);
+                let table = self.get_table(table_id);
+                if let Some(mut table) = table {
+                    table.parts.clear();
+                    let table_key: &String = &[TBL_PREFIX, &table_id.to_string()].join("");
+                    self.upsert_kv(table_key, &MatchSeq::Any, &Some(table.serialize_into_vec()))
+                        .await
+                        .unwrap();
+                    self.table_parts.remove(table_id);
+                }
             }
         }
     }
 
-    pub fn remove_db_data_parts(&mut self, db_name: &str) {
-        let db = self.databases.get(db_name);
+    pub async fn remove_db_data_parts(&mut self, db_name: &str) {
+        let db_name = if db_name.starts_with(DB_PREFIX) {
+            db_name.to_string()
+        } else {
+            let tmp: String = [DB_PREFIX, db_name].join("");
+            tmp
+        };
+        let db = self.get_database(&db_name);
         if let Some(db) = db {
             for table_id in db.tables.values() {
-                self.tables.entry(*table_id).and_modify(|t| t.parts.clear());
-                self.table_parts.remove(table_id);
+                let table = self.get_table(table_id);
+                if let Some(mut table) = table {
+                    table.parts.clear();
+                    let table_key: &String = &[TBL_PREFIX, &table_id.to_string()].join("");
+                    self.upsert_kv(table_key, &MatchSeq::Any, &Some(table.serialize_into_vec()))
+                        .await
+                        .unwrap();
+                    self.table_parts.remove(table_id);
+                }
             }
         }
     }
