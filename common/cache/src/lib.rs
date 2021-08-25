@@ -11,4 +11,19 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
+
+#[macro_use]
+extern crate log;
+
+#[cfg(test)]
+mod disk_cache_test;
+#[cfg(test)]
+mod memory_cache_test;
+
+#[allow(dead_code)]
+mod disk_cache;
+mod memory_cache;
+
+pub use disk_cache::LruDiskCache;
+pub use memory_cache::LruCache;
+pub use memory_cache::Meter;
