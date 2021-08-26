@@ -17,11 +17,12 @@ use std::convert::TryInto;
 use std::task::Context;
 use std::task::Poll;
 
-use common_arrow::arrow;
+use common_arrow::arrow::array;
+use common_arrow::arrow::bitmap;
+use common_arrow::arrow::compute::filter;
 use common_datablocks::DataBlock;
 use common_datablocks::HashMethod;
 use common_datablocks::HashMethodSerializer;
-use common_datavalues::prelude::*;
 use common_exception::Result;
 use futures::Stream;
 use futures::StreamExt;
@@ -50,24 +51,28 @@ impl LimitByStream {
     }
 
     pub fn limit_by(&mut self, block: &DataBlock) -> Result<Option<DataBlock>> {
-        // TODO: use BitVec here.
-        let mut filter_vec = vec![false; block.num_rows()];
+        let mut filter = bitmap::MutableBitmap::from_len_zeroed(block.num_rows());
         let method = HashMethodSerializer::default();
         let group_indices = method.group_by_get_indices(block, &self.limit_by_columns_name)?;
 
         for (limit_by_key, (rows, _)) in group_indices {
-            for row in rows {
-                let count = self.keys_count.entry(limit_by_key.clone()).or_default();
+            let count = self.keys_count.entry(limit_by_key.clone()).or_default();
+            // limit reached, no need to check rows
+            if *count >= self.limit {
+                continue;
+            }
+
+            // limit not reached yet, still have room for rows, keep filling with row index
+            let remaining_room = self.limit - *count;
+            for row in rows.iter().take(std::cmp::min(remaining_room, rows.len())) {
+                filter.set(*row as usize, true);
                 *count += 1;
-                filter_vec[row as usize] = *count <= self.limit;
             }
         }
 
-        let filter_array = DFBooleanArray::new_from_slice(&filter_vec);
-
+        let filter_values = array::MutableBooleanArray::from_data(filter, None);
         let batch = block.clone().try_into()?;
-        let batch =
-            arrow::compute::filter::filter_record_batch(&batch, filter_array.downcast_ref())?;
+        let batch = filter::filter_record_batch(&batch, &array::BooleanArray::from(filter_values))?;
         Some(batch.try_into()).transpose()
     }
 }
