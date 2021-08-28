@@ -12,22 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(test)]
-mod plan_parser_test;
-#[cfg(test)]
-mod sql_parser_test;
+use common_exception::Result;
 
-mod expression;
-mod metrics;
-mod parser;
-mod plan_parser;
-pub mod planner;
-mod sql_common;
-mod sql_parser;
-mod sql_statement;
+use crate::sql::expression::Expression;
+use crate::sql::parser::ast::Expr;
+use crate::sql::planner::binder::BindContext;
 
-pub use plan_parser::PlanParser;
-pub use sql_common::SQLCommon;
-pub use sql_parser::DfParser;
-pub use sql_statement::*;
-pub use planner::physical_plan::*;
+// ExpressionBinder can bind a Expr to Expression with BindContext and do type check
+#[derive(Debug)]
+pub struct ExpressionBinder<'a> {
+    bind_context: &'a BindContext,
+}
+
+impl<'a> ExpressionBinder<'a> {
+    pub fn new(bind_context: &'a BindContext) -> Self {
+        ExpressionBinder { bind_context }
+    }
+
+    pub fn bind(&mut self, expr: &Expr) -> Result<Expression> {
+        todo!()
+    }
+}
