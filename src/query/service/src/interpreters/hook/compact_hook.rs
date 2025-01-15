@@ -204,8 +204,8 @@ async fn compact_table(
                     &compact_target.database,
                     &compact_target.table,
                 )?;
-                let avail_memory_usage =
-                    settings.get_max_memory_usage()? - GLOBAL_MEM_STAT.get_memory_usage().max(0) as u64;
+                let avail_memory_usage = settings.get_max_memory_usage()?
+                    - GLOBAL_MEM_STAT.get_memory_usage().max(0) as u64;
                 let recluster_block_size = settings
                     .get_recluster_block_size()?
                     .min(avail_memory_usage * 30 / 100);
