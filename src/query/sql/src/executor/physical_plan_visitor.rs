@@ -338,7 +338,6 @@ pub trait PhysicalPlanReplacer {
     }
 
     fn replace_exchange(&mut self, plan: &Exchange) -> Result<PhysicalPlan> {
-        println!("replace_exchange trait");
         let input = self.replace(&plan.input)?;
 
         Ok(PhysicalPlan::Exchange(Exchange {
