@@ -101,7 +101,10 @@ impl GrantPrivilegeInterpreter {
             GrantObject::UDF(name) => Ok(OwnershipObject::UDF {
                 name: name.to_string(),
             }),
-            GrantObject::Global | GrantObject::Warehouse(_) => Err(ErrorCode::IllegalGrant(
+            GrantObject::Warehouse(uid) => Ok(OwnershipObject::Warehouse {
+                uid: uid.to_string(),
+            }),
+            GrantObject::Global => Err(ErrorCode::IllegalGrant(
                 "Illegal GRANT/REVOKE command; please consult the manual to see which privileges can be used",
             )),
         }
@@ -128,7 +131,7 @@ impl GrantPrivilegeInterpreter {
         }
 
         let mut log_msg = format!(
-            "{}: grant ownership on {:?}  to {}",
+            "{}: grant ownership on {:?} to {}",
             ctx.get_id(),
             owner_object,
             new_role
