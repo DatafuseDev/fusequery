@@ -743,7 +743,7 @@ impl Display for Expr {
                     write!(f, "}}")?;
                 }
                 Expr::Interval { expr, unit, .. } => {
-                    write!(f, "INTERVAL {expr} {unit}")?;
+                    write!(f, "{expr} {unit}")?;
                 }
                 Expr::DateAdd {
                     unit,
