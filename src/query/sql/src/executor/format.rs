@@ -300,6 +300,17 @@ pub fn format_partial_tree(
                 children,
             ))
         }
+        PhysicalPlan::MutationSource(plan) => {
+            let metadata = metadata.read().clone();
+            let table = metadata.table(plan.table_index).clone();
+            let table_name = format!("{}.{}.{}", table.catalog(), table.database(), table.name());
+            let mut children = vec![FormatTreeNode::new(format!("table: {table_name}"))];
+            append_output_rows_info(&mut children, profs, plan.plan_id);
+            Ok(FormatTreeNode::with_children(
+                "Mutation Source".to_string(),
+                children,
+            ))
+        }
         other => {
             let children = other
                 .children()
@@ -514,13 +525,37 @@ fn append_output_rows_info(
 }
 
 fn format_mutation_source(
-    _plan: &MutationSource,
-    _metadata: &Metadata,
-    _profs: &HashMap<u32, PlanProfile>,
+    plan: &MutationSource,
+    metadata: &Metadata,
+    profs: &HashMap<u32, PlanProfile>,
 ) -> Result<FormatTreeNode<String>> {
+    let table = metadata.table(plan.table_index);
+    let table_name = format!("{}.{}.{}", table.catalog(), table.database(), table.name());
+    let filters = plan
+        .filters
+        .as_ref()
+        .map(|filters| filters.filter.as_expr(&BUILTIN_FUNCTIONS).sql_display())
+        .unwrap_or_default();
+
+    let mut children = vec![
+        FormatTreeNode::new(format!("table: {table_name}")),
+        FormatTreeNode::new(format!(
+            "output columns: [{}]",
+            format_output_columns(plan.output_schema()?, metadata, false)
+        )),
+    ];
+
+    // Part stats.
+    children.extend(part_stats_info_to_format_tree(&plan.statistics));
+    // Push downs.
+    let push_downs = format!("push downs: [filters: [{filters}]]");
+    children.push(FormatTreeNode::new(push_downs));
+
+    append_profile_info(&mut children, profs, plan.plan_id);
+
     Ok(FormatTreeNode::with_children(
-        format!("Mutation Source"),
-        vec![],
+        "Mutation Source".to_string(),
+        children,
     ))
 }
 
