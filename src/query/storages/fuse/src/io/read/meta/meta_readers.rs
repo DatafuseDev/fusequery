@@ -49,6 +49,7 @@ pub type BloomIndexMetaReader = InMemoryItemCacheReader<BloomIndexMeta, LoaderWr
 pub type TableSnapshotReader = InMemoryItemCacheReader<TableSnapshot, LoaderWrapper<Operator>>;
 pub type CompactSegmentInfoReader =
     InMemoryItemCacheReader<CompactSegmentInfo, LoaderWrapper<(Operator, TableSchemaRef)>>;
+pub type ColumnOrientedSegmentReader = LoaderWrapper<(Operator, TableSchemaRef)>;
 pub type InvertedIndexMetaReader =
     InMemoryItemCacheReader<InvertedIndexMeta, LoaderWrapper<Operator>>;
 

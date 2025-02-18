@@ -14,6 +14,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+mod column;
 mod compression;
 mod current;
 mod format;
@@ -26,9 +27,11 @@ mod v3;
 mod v4;
 mod versions;
 
+pub use column::*;
 pub use compression::Compression;
 // table meta types of current version
 pub use current::*;
+pub use format::decode;
 pub(crate) use format::load_json;
 pub(crate) use format::MetaCompression;
 pub(crate) use format::MetaEncoding;
