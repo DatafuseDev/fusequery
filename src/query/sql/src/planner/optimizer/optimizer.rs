@@ -52,6 +52,7 @@ use crate::plans::Join;
 use crate::plans::JoinType;
 use crate::plans::MatchedEvaluator;
 use crate::plans::Mutation;
+use crate::plans::MutationSource;
 use crate::plans::Operator;
 use crate::plans::Plan;
 use crate::plans::RelOp;
@@ -533,6 +534,8 @@ async fn get_optimized_memo(opt_ctx: &mut OptimizerContext, mut s_expr: SExpr) -
 async fn optimize_mutation(mut opt_ctx: OptimizerContext, s_expr: SExpr) -> Result<Plan> {
     // Optimize the input plan.
     let mut input_s_expr = optimize_query(&mut opt_ctx, s_expr.child(0)?.clone()).await?;
+    input_s_expr =
+        RecursiveOptimizer::new(&[RuleID::MergeFilterIntoMutation], &opt_ctx).run(&input_s_expr)?;
 
     // For distributed query optimization, we need to remove the Exchange operator at the top of the plan.
     if let &RelOperator::Exchange(_) = input_s_expr.plan() {
@@ -556,11 +559,7 @@ async fn optimize_mutation(mut opt_ctx: OptimizerContext, s_expr: SExpr) -> Resu
     if !mutation.matched_evaluators.is_empty() {
         match inner_rel_op {
             RelOp::ConstantTableScan => {
-                mutation.matched_evaluators = vec![MatchedEvaluator {
-                    condition: None,
-                    update: None,
-                }];
-                mutation.can_try_update_column_only = false;
+                mutation.no_effect = true;
             }
             RelOp::Join => {
                 let right_child = input_s_expr.child(1)?;
@@ -609,7 +608,22 @@ async fn optimize_mutation(mut opt_ctx: OptimizerContext, s_expr: SExpr) -> Resu
                 input_s_expr
             }
         }
-        MutationType::Update | MutationType::Delete => input_s_expr,
+        MutationType::Update | MutationType::Delete => {
+            if mutation.strategy == MutationStrategy::Direct {
+                let mutation_source: MutationSource = input_s_expr.plan().clone().try_into()?;
+                if mutation_source.mutation_type == MutationType::Delete
+                    && mutation_source.predicates.is_empty()
+                {
+                    mutation.truncate_table = true;
+                }
+                mutation.direct_filter = mutation_source.predicates;
+                if let Some(index) = mutation_source.predicate_column_index {
+                    mutation.required_columns.insert(index);
+                    mutation.predicate_column_index = Some(index);
+                }
+            }
+            input_s_expr
+        }
     };
 
     Ok(Plan::DataMutation {
