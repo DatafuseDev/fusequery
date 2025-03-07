@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use databend_common_base::runtime::execute_futures_in_parallel;
 use databend_common_exception::Result;
 use databend_common_expression::ColumnId;
 use databend_common_expression::TableSchemaRef;
@@ -28,6 +29,7 @@ use opendal::Operator;
 
 use super::meta::bytes_reader;
 use crate::io::SegmentsIO;
+use crate::TableContext;
 
 #[async_trait::async_trait]
 pub trait SegmentReader: Send + Sync + 'static {
@@ -37,7 +39,59 @@ pub trait SegmentReader: Send + Sync + 'static {
         location: Location,
         column_ids: Vec<ColumnId>,
         table_schema: TableSchemaRef,
+    ) -> Result<Arc<Self::Segment>> {
+        Self::read_segment(dal, location, column_ids, table_schema, true).await
+    }
+
+    async fn read_segment(
+        dal: Operator,
+        location: Location,
+        column_ids: Vec<ColumnId>,
+        table_schema: TableSchemaRef,
+        put_cache: bool,
     ) -> Result<Arc<Self::Segment>>;
+
+    async fn read_segments_by_pass_cache(
+        dal: Operator,
+        locations: &[Location],
+        column_ids: Vec<ColumnId>,
+        table_schema: TableSchemaRef,
+        ctx: Arc<dyn TableContext>,
+    ) -> Result<Vec<Result<Arc<Self::Segment>>>> {
+        Self::read_segments(dal, locations, column_ids, table_schema, false, ctx).await
+    }
+
+    async fn read_segments(
+        dal: Operator,
+        locations: &[Location],
+        column_ids: Vec<ColumnId>,
+        table_schema: TableSchemaRef,
+        put_cache: bool,
+        ctx: Arc<dyn TableContext>,
+    ) -> Result<Vec<Result<Arc<Self::Segment>>>> {
+        // combine all the tasks.
+        // let mut iter = locations.iter();
+        // let tasks = std::iter::from_fn(|| {
+        //     iter.next().map(|location| {
+        //         let dal = dal.clone();
+        //         let table_schema = table_schema.clone();
+        //         let column_ids = column_ids.clone();
+        //         let put_cache = put_cache;
+        //         Self::read_segment(dal, location.clone(), column_ids, table_schema, put_cache)
+        //     })
+        // });
+
+        // let threads_nums = ctx.get_settings().get_max_threads()? as usize;
+        // let permit_nums = threads_nums * 2;
+        // execute_futures_in_parallel(
+        //     tasks,
+        //     threads_nums,
+        //     permit_nums,
+        //     "fuse-req-segments-worker".to_owned(),
+        // )
+        // .await
+        todo!()
+    }
 }
 
 pub struct CompactSegmentReader;
@@ -45,13 +99,14 @@ pub struct CompactSegmentReader;
 #[async_trait::async_trait]
 impl SegmentReader for CompactSegmentReader {
     type Segment = CompactSegmentInfo;
-    async fn read_segment_through_cache(
+    async fn read_segment(
         dal: Operator,
         location: Location,
         _column_ids: Vec<ColumnId>,
         table_schema: TableSchemaRef,
+        put_cache: bool,
     ) -> Result<Arc<Self::Segment>> {
-        SegmentsIO::read_compact_segment(dal, location, table_schema, true).await
+        SegmentsIO::read_compact_segment(dal, location, table_schema, put_cache).await
     }
 }
 
@@ -60,20 +115,23 @@ pub struct ColumnOrientedSegmentReader;
 #[async_trait::async_trait]
 impl SegmentReader for ColumnOrientedSegmentReader {
     type Segment = ColumnOrientedSegment;
-    async fn read_segment_through_cache(
+    async fn read_segment(
         dal: Operator,
         location: Location,
         column_ids: Vec<ColumnId>,
         _table_schema: TableSchemaRef,
+        put_cache: bool,
     ) -> Result<Arc<Self::Segment>> {
-        read_column_oriented_segment(dal, &location.0, column_ids).await
+        read_column_oriented_segment(dal, &location.0, column_ids, put_cache).await
     }
 }
 
+// TODO(Sky): support projection for block level meta(like block location), for example: in compact segment, only block location is needed.
 pub async fn read_column_oriented_segment(
     dal: Operator,
     location: &str,
     column_ids: Vec<ColumnId>,
+    put_cache: bool,
 ) -> Result<Arc<ColumnOrientedSegment>> {
     let cache = CacheManager::instance().get_column_oriented_segment_info_cache();
     let cached_segment = cache.get(location);
@@ -101,7 +159,10 @@ pub async fn read_column_oriented_segment(
                 summary: segment.summary().clone(),
                 segment_schema: merged_schema,
             };
-            cache.insert(location.to_string(), merged_segment.clone());
+
+            if put_cache {
+                cache.insert(location.to_string(), merged_segment.clone());
+            }
             Ok(Arc::new(merged_segment))
         }
         None => {
@@ -113,7 +174,10 @@ pub async fn read_column_oriented_segment(
                 summary: summary.unwrap(),
                 segment_schema,
             };
-            cache.insert(location.to_string(), segment.clone());
+
+            if put_cache {
+                cache.insert(location.to_string(), segment.clone());
+            }
             Ok(Arc::new(segment))
         }
     }
