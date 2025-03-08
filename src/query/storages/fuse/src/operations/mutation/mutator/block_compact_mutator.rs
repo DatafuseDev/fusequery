@@ -30,12 +30,14 @@ use databend_common_expression::is_stream_column_id;
 use databend_common_expression::BlockThresholds;
 use databend_common_expression::ColumnId;
 use databend_common_metrics::storage::*;
+use databend_storages_common_table_meta::meta::column_oriented_segment::AbstractSegment;
 use databend_storages_common_table_meta::meta::BlockMeta;
 use databend_storages_common_table_meta::meta::CompactSegmentInfo;
 use databend_storages_common_table_meta::meta::Statistics;
 use log::info;
 use opendal::Operator;
 
+use crate::io::read::SegmentReader;
 use crate::io::SegmentsIO;
 use crate::operations::acquire_task_permit;
 use crate::operations::common::BlockMetaIndex;
@@ -51,16 +53,17 @@ use crate::statistics::sort_by_cluster_stats;
 use crate::TableContext;
 
 #[derive(Clone)]
-pub struct BlockCompactMutator {
+pub struct BlockCompactMutator<S: SegmentReader> {
     pub ctx: Arc<dyn TableContext>,
     pub operator: Operator,
 
     pub thresholds: BlockThresholds,
     pub compact_params: CompactOptions,
     pub cluster_key_id: Option<u32>,
+    _marker: std::marker::PhantomData<S>,
 }
 
-impl BlockCompactMutator {
+impl<S: SegmentReader> BlockCompactMutator<S> {
     pub fn new(
         ctx: Arc<dyn TableContext>,
         thresholds: BlockThresholds,
@@ -74,6 +77,7 @@ impl BlockCompactMutator {
             thresholds,
             compact_params,
             cluster_key_id,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -119,25 +123,30 @@ impl BlockCompactMutator {
         let chunk_size = max_threads * 4;
         for chunk in segment_locations.chunks(chunk_size) {
             // Read the segments information in parallel.
-            let mut segment_infos = segments_io
-                .read_segments::<Arc<CompactSegmentInfo>>(chunk, false)
-                .await?
-                .into_iter()
-                .map(|sg| {
-                    sg.map(|v| {
-                        let idx = segment_idx;
-                        segment_idx += 1;
-                        (idx, v)
-                    })
+            let mut segment_infos = S::read_segments_by_pass_cache(
+                self.operator.clone(),
+                chunk,
+                vec![],
+                Arc::new(self.compact_params.base_snapshot.schema.clone()),
+                self.ctx.clone(),
+            )
+            .await?
+            .into_iter()
+            .map(|sg| {
+                sg.map(|v| {
+                    let idx = segment_idx;
+                    segment_idx += 1;
+                    (idx, v)
                 })
-                .collect::<Result<Vec<_>>>()?;
+            })
+            .collect::<Result<Vec<_>>>()?;
 
             if let Some(default_cluster_key) = self.cluster_key_id {
                 // sort descending.
                 segment_infos.sort_by(|a, b| {
                     sort_by_cluster_stats(
-                        &b.1.summary.cluster_stats,
-                        &a.1.summary.cluster_stats,
+                        &b.1.summary().cluster_stats,
+                        &a.1.summary().cluster_stats,
                         default_cluster_key,
                     )
                 });

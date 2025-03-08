@@ -47,6 +47,7 @@ use indexmap::IndexSet;
 use log::debug;
 use log::warn;
 
+use crate::io::read::CompactSegmentReader;
 use crate::operations::mutation::SegmentCompactChecker;
 use crate::operations::BlockCompactMutator;
 use crate::operations::CompactLazyPartInfo;
@@ -420,7 +421,7 @@ impl ReclusterMutator {
                 .collect::<Vec<_>>();
             Partitions::create(
                 PartitionsShuffleKind::Mod,
-                BlockCompactMutator::build_compact_tasks(
+                BlockCompactMutator::<CompactSegmentReader>::build_compact_tasks(
                     self.ctx.clone(),
                     self.column_ids.clone(),
                     Some(self.cluster_key_id),
