@@ -164,7 +164,7 @@ impl ReclusterChecker {
         });
 
         if segment_should_recluster || !self.head_of_snapshot {
-            self.total_bytes += segment.summary.uncompressed_byte_size as usize;
+            self.total_bytes += segment.summary.compressed_byte_size as usize;
             self.segments.push((location.clone(), segment.clone()));
         }
 
