@@ -671,7 +671,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
 
     // Test: A != 1 AND A <= 1 => A < 1
     {
-        let pred_a_ne_1 = create_comparison(col_a.clone(), const_1.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_1 =
+            create_comparison(col_a.clone(), const_1.clone(), ComparisonOp::NotEqual)?;
         let pred_a_lte_1 = create_comparison(col_a.clone(), const_1.clone(), ComparisonOp::LTE)?;
 
         let result = run_optimizer(vec![pred_a_ne_1, pred_a_lte_1])?;
@@ -700,7 +701,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
     // Test: A <= 5 AND A != 5 => A < 5 (reverse order)
     {
         let pred_a_lte_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::LTE)?;
-        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_5 =
+            create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
 
         let result = run_optimizer(vec![pred_a_lte_5, pred_a_ne_5])?;
 
@@ -727,7 +729,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
 
     // Test: A != 10 AND A <= 10 => A < 10 (with different constant)
     {
-        let pred_a_ne_10 = create_comparison(col_a.clone(), const_10.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_10 =
+            create_comparison(col_a.clone(), const_10.clone(), ComparisonOp::NotEqual)?;
         let pred_a_lte_10 = create_comparison(col_a.clone(), const_10.clone(), ComparisonOp::LTE)?;
 
         let result = run_optimizer(vec![pred_a_ne_10, pred_a_lte_10])?;
@@ -750,7 +753,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
 
     // Test: A != 5 AND A >= 5 => A > 5
     {
-        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_5 =
+            create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
         let pred_a_gte_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GTE)?;
 
         let result = run_optimizer(vec![pred_a_ne_5, pred_a_gte_5])?;
@@ -774,7 +778,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
     // Test: A >= 5 AND A != 5 => A > 5 (reverse order)
     {
         let pred_a_gte_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GTE)?;
-        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_5 =
+            create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
 
         let result = run_optimizer(vec![pred_a_gte_5, pred_a_ne_5])?;
 
@@ -796,7 +801,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
 
     // Test: A != 5 AND A < 5 => A < 5 (redundant NotEqual)
     {
-        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_5 =
+            create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
         let pred_a_lt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::LT)?;
 
         let result = run_optimizer(vec![pred_a_ne_5, pred_a_lt_5])?;
@@ -820,7 +826,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
     // Test: A < 5 AND A != 5 => A < 5 (redundant NotEqual, reverse order)
     {
         let pred_a_lt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::LT)?;
-        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_5 =
+            create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
 
         let result = run_optimizer(vec![pred_a_lt_5, pred_a_ne_5])?;
 
@@ -842,7 +849,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
 
     // Test: A != 5 AND A > 5 => A > 5 (redundant NotEqual)
     {
-        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_5 =
+            create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
         let pred_a_gt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GT)?;
 
         let result = run_optimizer(vec![pred_a_ne_5, pred_a_gt_5])?;
@@ -866,7 +874,8 @@ fn test_filter_simplification_with_not_equal() -> Result<()> {
     // Test: A > 5 AND A != 5 => A > 5 (redundant NotEqual, reverse order)
     {
         let pred_a_gt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GT)?;
-        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_ne_5 =
+            create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
 
         let result = run_optimizer(vec![pred_a_gt_5, pred_a_ne_5])?;
 
