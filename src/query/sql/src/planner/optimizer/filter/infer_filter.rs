@@ -194,16 +194,19 @@ impl<'a> InferFilterOptimizer<'a> {
             Some(index) => {
                 let predicates = &mut self.expr_predicates[*index];
                 for predicate in predicates.iter_mut() {
-                    match Self::merge_predicate(predicate.clone(), new_predicate.clone())? {
+                    let (merge_result, modified_left, modified_right) =
+                        Self::merge_predicate(predicate.clone(), new_predicate.clone())?;
+                    match merge_result {
                         MergeResult::None => {
                             self.is_falsy = true;
                             return Ok(());
                         }
                         MergeResult::Left => {
+                            *predicate = modified_left;
                             return Ok(());
                         }
                         MergeResult::Right => {
-                            *predicate = new_predicate;
+                            *predicate = modified_right;
                             return Ok(());
                         }
                         MergeResult::All => (),
@@ -218,7 +221,10 @@ impl<'a> InferFilterOptimizer<'a> {
         Ok(())
     }
 
-    fn merge_predicate(mut left: Predicate, mut right: Predicate) -> Result<MergeResult> {
+    fn merge_predicate(
+        mut left: Predicate,
+        mut right: Predicate,
+    ) -> Result<(MergeResult, Predicate, Predicate)> {
         let left_data_type = ScalarExpr::ConstantExpr(left.constant.clone()).data_type()?;
         let right_data_type = ScalarExpr::ConstantExpr(right.constant.clone()).data_type()?;
         if left_data_type != right_data_type {
@@ -237,152 +243,262 @@ impl<'a> InferFilterOptimizer<'a> {
                     right.constant = right_constant;
                 }
             } else {
-                return Ok(MergeResult::All);
+                return Ok((MergeResult::All, left, right));
             }
         }
         let merge_result = match left.op {
             ComparisonOp::Equal => match right.op {
                 ComparisonOp::Equal => match left.constant == right.constant {
+                    // A = 1 AND A = 1 => A = 1
                     true => MergeResult::Left,
+                    // A = 1 AND A = 2 => false (contradiction)
                     false => MergeResult::None,
                 },
                 ComparisonOp::NotEqual => match left.constant == right.constant {
+                    // A = 1 AND A != 1 => false (contradiction)
                     true => MergeResult::None,
+                    // A = 1 AND A != 2 => A = 1
                     false => MergeResult::Left,
                 },
                 ComparisonOp::LT => match left.constant < right.constant {
+                    // A = 1 AND A < 2 => A = 1
                     true => MergeResult::Left,
+                    // A = 2 AND A < 1 => false (contradiction)
                     false => MergeResult::None,
                 },
                 ComparisonOp::LTE => match left.constant <= right.constant {
+                    // A = 1 AND A <= 2 => A = 1
                     true => MergeResult::Left,
+                    // A = 2 AND A <= 1 => false (contradiction)
                     false => MergeResult::None,
                 },
                 ComparisonOp::GT => match left.constant > right.constant {
+                    // A = 2 AND A > 1 => A = 2
                     true => MergeResult::Left,
+                    // A = 1 AND A > 2 => false (contradiction)
                     false => MergeResult::None,
                 },
                 ComparisonOp::GTE => match left.constant >= right.constant {
+                    // A = 2 AND A >= 1 => A = 2
                     true => MergeResult::Left,
+                    // A = 1 AND A >= 2 => false (contradiction)
                     false => MergeResult::None,
                 },
             },
             ComparisonOp::NotEqual => match right.op {
                 ComparisonOp::Equal => match left.constant == right.constant {
+                    // A != 1 AND A = 1 => false (contradiction)
                     true => MergeResult::None,
+                    // A != 1 AND A = 2 => A = 2
                     false => MergeResult::Right,
                 },
                 ComparisonOp::NotEqual => match left.constant == right.constant {
+                    // A != 1 AND A != 1 => A != 1
                     true => MergeResult::Left,
+                    // A != 1 AND A != 2 => keep both (A != 1 AND A != 2)
                     false => MergeResult::All,
                 },
-                ComparisonOp::LT => match left.constant >= right.constant {
-                    true => MergeResult::Right,
-                    false => MergeResult::All,
+                ComparisonOp::LT => match left.constant.cmp(&right.constant) {
+                    // A != 1 AND A < 2 => A < 2 (since A < 2 implies A != 2, and we already have A != 1)
+                    std::cmp::Ordering::Greater => MergeResult::Right,
+                    // A != 1 AND A < 1 => A < 1
+                    std::cmp::Ordering::Equal => MergeResult::Right,
+                    // A != 2 AND A < 1 => A < 1
+                    std::cmp::Ordering::Less => MergeResult::Right,
                 },
-                ComparisonOp::LTE => match left.constant > right.constant {
-                    true => MergeResult::Right,
-                    false => MergeResult::All,
+                ComparisonOp::LTE => match left.constant.cmp(&right.constant) {
+                    // A != 1 AND A <= 0 => A <= 0
+                    std::cmp::Ordering::Greater => MergeResult::None,
+                    std::cmp::Ordering::Equal => {
+                        // A != 1 AND A <= 1 => A < 1
+                        right.op = ComparisonOp::LT;
+                        MergeResult::Right
+                    }
+                    // A != 2 AND A <= 1 => A <= 1
+                    std::cmp::Ordering::Less => MergeResult::All,
                 },
                 ComparisonOp::GT => match left.constant <= right.constant {
+                    // A != 1 AND A > 1 => A > 1
                     true => MergeResult::Right,
+                    // A != 1 AND A > 0 => keep both (A != 1 AND A > 0)
                     false => MergeResult::All,
                 },
-                ComparisonOp::GTE => match left.constant < right.constant {
-                    true => MergeResult::Right,
-                    false => MergeResult::All,
+                ComparisonOp::GTE => match left.constant.cmp(&right.constant) {
+                    // A != 1 AND A >= 2 => A >= 2
+                    std::cmp::Ordering::Less => MergeResult::Right,
+                    std::cmp::Ordering::Equal => {
+                        // A != 1 AND A >= 1 => A > 1
+                        right.op = ComparisonOp::GT;
+                        MergeResult::Right
+                    }
+                    // A != 1 AND A >= 0 => keep both (A != 1 AND A >= 0)
+                    std::cmp::Ordering::Greater => MergeResult::All,
                 },
             },
             ComparisonOp::LT => match right.op {
                 ComparisonOp::Equal => match left.constant <= right.constant {
+                    // A < 2 AND A = 1 => A = 1
                     true => MergeResult::None,
+                    // A < 1 AND A = 2 => false (contradiction)
                     false => MergeResult::Right,
                 },
-                ComparisonOp::NotEqual => match left.constant <= right.constant {
-                    true => MergeResult::Left,
-                    false => MergeResult::All,
+                ComparisonOp::NotEqual => match left.constant.cmp(&right.constant) {
+                    // A < 2 AND A != 1 => keep both (A < 2 AND A != 1)
+                    std::cmp::Ordering::Less => MergeResult::Left,
+                    // A < 1 AND A != 1 => A < 1
+                    std::cmp::Ordering::Equal => MergeResult::Left,
+                    // A < 0 AND A != 1 => A < 0
+                    std::cmp::Ordering::Greater => MergeResult::Left,
                 },
                 ComparisonOp::LT | ComparisonOp::LTE => match left.constant <= right.constant {
+                    // A < 1 AND A < 2 => A < 1
+                    // A < 1 AND A <= 2 => A < 1
                     true => MergeResult::Left,
+                    // A < 2 AND A < 1 => A < 1
+                    // A < 2 AND A <= 1 => A <= 1
                     false => MergeResult::Right,
                 },
                 ComparisonOp::GT | ComparisonOp::GTE => match left.constant <= right.constant {
+                    // A < 1 AND A > 1 => false (contradiction)
+                    // A < 1 AND A >= 1 => false (contradiction)
                     true => MergeResult::None,
+                    // A < 2 AND A > 1 => 1 < A < 2
+                    // A < 2 AND A >= 1 => 1 <= A < 2
                     false => MergeResult::All,
                 },
             },
             ComparisonOp::LTE => match right.op {
                 ComparisonOp::Equal => match left.constant < right.constant {
+                    // A <= 2 AND A = 1 => A = 1
                     true => MergeResult::None,
+                    // A <= 1 AND A = 1 => A = 1
+                    // A <= 0 AND A = 1 => false (contradiction)
                     false => MergeResult::Right,
                 },
-                ComparisonOp::NotEqual => match left.constant < right.constant {
-                    true => MergeResult::Left,
-                    false => MergeResult::All,
+                ComparisonOp::NotEqual => match left.constant.cmp(&right.constant) {
+                    // A <= 2 AND A != 1 => keep both (A <= 2 AND A != 1)
+                    std::cmp::Ordering::Less => MergeResult::Left,
+                    std::cmp::Ordering::Equal => {
+                        // A <= 1 AND A != 1 => A < 1
+                        left.op = ComparisonOp::LT;
+                        MergeResult::Left
+                    }
+                    // A <= 0 AND A != 1 => A <= 0
+                    std::cmp::Ordering::Greater => MergeResult::All,
                 },
                 ComparisonOp::LT => match left.constant < right.constant {
+                    // A <= 1 AND A < 2 => A <= 1
                     true => MergeResult::Left,
+                    // A <= 2 AND A < 1 => A < 1
                     false => MergeResult::Right,
                 },
                 ComparisonOp::LTE => match left.constant <= right.constant {
+                    // A <= 1 AND A <= 2 => A <= 1
                     true => MergeResult::Left,
+                    // A <= 2 AND A <= 1 => A <= 1
                     false => MergeResult::Right,
                 },
                 ComparisonOp::GT => match left.constant <= right.constant {
+                    // A <= 1 AND A > 1 => false (contradiction)
                     true => MergeResult::None,
+                    // A <= 2 AND A > 1 => 1 < A <= 2
                     false => MergeResult::All,
                 },
-                ComparisonOp::GTE => match left.constant < right.constant {
-                    true => MergeResult::None,
-                    false => MergeResult::All,
+                ComparisonOp::GTE => match left.constant.cmp(&right.constant) {
+                    // A <= 1 AND A >= 2 => false (contradiction)
+                    std::cmp::Ordering::Less => MergeResult::None,
+                    std::cmp::Ordering::Equal => {
+                        // A <= 1 AND A >= 1 => A = 1
+                        right.op = ComparisonOp::Equal;
+                        MergeResult::Right
+                    }
+                    // A <= 2 AND A >= 1 => 1 <= A <= 2
+                    std::cmp::Ordering::Greater => MergeResult::All,
                 },
             },
             ComparisonOp::GT => match right.op {
                 ComparisonOp::Equal => match left.constant >= right.constant {
+                    // A > 1 AND A = 1 => false (contradiction)
                     true => MergeResult::None,
+                    // A > 0 AND A = 1 => A = 1
                     false => MergeResult::Right,
                 },
                 ComparisonOp::NotEqual => match left.constant >= right.constant {
+                    // A > 1 AND A != 1 => A > 1
+                    // A > 1 AND A != 2 => keep both (A > 1 AND A != 2)
                     true => MergeResult::Left,
+                    // A > 0 AND A != 1 => keep both (A > 0 AND A != 1)
                     false => MergeResult::All,
                 },
                 ComparisonOp::LT | ComparisonOp::LTE => match left.constant >= right.constant {
+                    // A > 2 AND A < 2 => false (contradiction)
+                    // A > 2 AND A <= 2 => false (contradiction)
                     true => MergeResult::None,
+                    // A > 1 AND A < 3 => 1 < A < 3
+                    // A > 1 AND A <= 3 => 1 < A <= 3
                     false => MergeResult::All,
                 },
                 ComparisonOp::GT | ComparisonOp::GTE => match left.constant >= right.constant {
+                    // A > 2 AND A > 1 => A > 2
+                    // A > 2 AND A >= 1 => A > 2
                     true => MergeResult::Left,
+                    // A > 1 AND A > 2 => A > 2
+                    // A > 1 AND A >= 2 => A >= 2
                     false => MergeResult::Right,
                 },
             },
             ComparisonOp::GTE => match right.op {
                 ComparisonOp::Equal => match left.constant > right.constant {
+                    // A >= 2 AND A = 1 => false (contradiction)
                     true => MergeResult::None,
+                    // A >= 1 AND A = 1 => A = 1
+                    // A >= 0 AND A = 1 => A = 1
                     false => MergeResult::Right,
                 },
-                ComparisonOp::NotEqual => match left.constant > right.constant {
-                    true => MergeResult::Left,
-                    false => MergeResult::All,
+                ComparisonOp::NotEqual => match left.constant.cmp(&right.constant) {
+                    // A >= 2 AND A != 1 => A >= 2
+                    std::cmp::Ordering::Less => MergeResult::None,
+                    std::cmp::Ordering::Equal => {
+                        // A >= 1 AND A != 1 => A > 1
+                        right.op = ComparisonOp::GT;
+                        MergeResult::Right
+                    }
+                    // A >= 0 AND A != 1 => keep both (A >= 0 AND A != 1)
+                    std::cmp::Ordering::Greater => MergeResult::All,
                 },
+
                 ComparisonOp::LT => match left.constant >= right.constant {
+                    // A >= 2 AND A < 1 => false (contradiction)
                     true => MergeResult::None,
+                    // A >= 1 AND A < 2 => 1 <= A < 2
                     false => MergeResult::All,
                 },
-                ComparisonOp::LTE => match left.constant > right.constant {
-                    true => MergeResult::None,
-                    false => MergeResult::All,
+                ComparisonOp::LTE => match left.constant.cmp(&right.constant) {
+                    // A >= 2 AND A <= 1 => false (contradiction)
+                    std::cmp::Ordering::Greater => MergeResult::None,
+                    std::cmp::Ordering::Equal => {
+                        // A >= 1 AND A <= 1 => A = 1
+                        right.op = ComparisonOp::Equal;
+                        MergeResult::Right
+                    }
+                    // A >= 1 AND A <= 2 => 1 <= A <= 2
+                    std::cmp::Ordering::Less => MergeResult::All,
                 },
                 ComparisonOp::GT => match left.constant > right.constant {
+                    // A >= 2 AND A > 1 => A >= 2
                     true => MergeResult::Left,
+                    // A >= 1 AND A > 1 => A > 1
                     false => MergeResult::Right,
                 },
                 ComparisonOp::GTE => match left.constant >= right.constant {
+                    // A >= 2 AND A >= 1 => A >= 2
                     true => MergeResult::Left,
+                    // A >= 1 AND A >= 2 => A >= 2
                     false => MergeResult::Right,
                 },
             },
         };
-        Ok(merge_result)
+        Ok((merge_result, left, right))
     }
 
     fn find(parent: &mut [usize], x: usize) -> usize {
