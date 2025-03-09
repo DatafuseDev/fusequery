@@ -194,16 +194,19 @@ impl<'a> InferFilterOptimizer<'a> {
             Some(index) => {
                 let predicates = &mut self.expr_predicates[*index];
                 for predicate in predicates.iter_mut() {
-                    match Self::merge_predicate(predicate.clone(), new_predicate.clone())? {
+                    let (merge_result, modified_left, modified_right) =
+                        Self::merge_predicate(predicate.clone(), new_predicate.clone())?;
+                    match merge_result {
                         MergeResult::None => {
                             self.is_falsy = true;
                             return Ok(());
                         }
                         MergeResult::Left => {
+                            *predicate = modified_left;
                             return Ok(());
                         }
                         MergeResult::Right => {
-                            *predicate = new_predicate;
+                            *predicate = modified_right;
                             return Ok(());
                         }
                         MergeResult::All => (),
@@ -218,7 +221,10 @@ impl<'a> InferFilterOptimizer<'a> {
         Ok(())
     }
 
-    fn merge_predicate(mut left: Predicate, mut right: Predicate) -> Result<MergeResult> {
+    fn merge_predicate(
+        mut left: Predicate,
+        mut right: Predicate,
+    ) -> Result<(MergeResult, Predicate, Predicate)> {
         let left_data_type = ScalarExpr::ConstantExpr(left.constant.clone()).data_type()?;
         let right_data_type = ScalarExpr::ConstantExpr(right.constant.clone()).data_type()?;
         if left_data_type != right_data_type {
@@ -237,7 +243,7 @@ impl<'a> InferFilterOptimizer<'a> {
                     right.constant = right_constant;
                 }
             } else {
-                return Ok(MergeResult::All);
+                return Ok((MergeResult::All, left, right));
             }
         }
         let merge_result = match left.op {
@@ -280,9 +286,14 @@ impl<'a> InferFilterOptimizer<'a> {
                     true => MergeResult::Right,
                     false => MergeResult::All,
                 },
-                ComparisonOp::LTE => match left.constant > right.constant {
-                    true => MergeResult::Right,
-                    false => MergeResult::All,
+                ComparisonOp::LTE => match left.constant.cmp(&right.constant) {
+                    std::cmp::Ordering::Greater => MergeResult::None,
+                    std::cmp::Ordering::Equal => {
+                        // When GTE and LTE have the same constant, convert to Equal
+                        right.op = ComparisonOp::Equal;
+                        MergeResult::Right
+                    }
+                    std::cmp::Ordering::Less => MergeResult::All,
                 },
                 ComparisonOp::GT => match left.constant <= right.constant {
                     true => MergeResult::Right,
@@ -332,9 +343,14 @@ impl<'a> InferFilterOptimizer<'a> {
                     true => MergeResult::None,
                     false => MergeResult::All,
                 },
-                ComparisonOp::GTE => match left.constant < right.constant {
-                    true => MergeResult::None,
-                    false => MergeResult::All,
+                ComparisonOp::GTE => match left.constant.cmp(&right.constant) {
+                    std::cmp::Ordering::Less => MergeResult::None,
+                    std::cmp::Ordering::Equal => {
+                        // When LTE and GTE have the same constant, convert to Equal
+                        right.op = ComparisonOp::Equal;
+                        MergeResult::Right
+                    }
+                    std::cmp::Ordering::Greater => MergeResult::All,
                 },
             },
             ComparisonOp::GT => match right.op {
@@ -368,9 +384,14 @@ impl<'a> InferFilterOptimizer<'a> {
                     true => MergeResult::None,
                     false => MergeResult::All,
                 },
-                ComparisonOp::LTE => match left.constant > right.constant {
-                    true => MergeResult::None,
-                    false => MergeResult::All,
+                ComparisonOp::LTE => match left.constant.cmp(&right.constant) {
+                    std::cmp::Ordering::Greater => MergeResult::None,
+                    std::cmp::Ordering::Equal => {
+                        // When GTE and LTE have the same constant, convert to Equal
+                        right.op = ComparisonOp::Equal;
+                        MergeResult::Right
+                    }
+                    std::cmp::Ordering::Less => MergeResult::All,
                 },
                 ComparisonOp::GT => match left.constant > right.constant {
                     true => MergeResult::Left,
@@ -382,7 +403,7 @@ impl<'a> InferFilterOptimizer<'a> {
                 },
             },
         };
-        Ok(merge_result)
+        Ok((merge_result, left, right))
     }
 
     fn find(parent: &mut [usize], x: usize) -> usize {
