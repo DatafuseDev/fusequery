@@ -660,3 +660,231 @@ fn test_complex_cases() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_filter_simplification_with_not_equal() -> Result<()> {
+    // Setup column and constant
+    let col_a = create_column_ref(0, "A", DataType::Number(NumberDataType::Int64));
+    let const_1 = create_int_constant(1);
+    let const_5 = create_int_constant(5);
+    let const_10 = create_int_constant(10);
+
+    // Test: A != 1 AND A <= 1 => A < 1
+    {
+        let pred_a_ne_1 = create_comparison(col_a.clone(), const_1.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_lte_1 = create_comparison(col_a.clone(), const_1.clone(), ComparisonOp::LTE)?;
+
+        let result = run_optimizer(vec![pred_a_ne_1, pred_a_lte_1])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("lt"),
+            "Function should be lt (less than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_column_index(&func.arguments[0]),
+                Some(0),
+                "First arg should be column A"
+            );
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(1),
+                "Second arg should be constant 1"
+            );
+        }
+    }
+
+    // Test: A <= 5 AND A != 5 => A < 5 (reverse order)
+    {
+        let pred_a_lte_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::LTE)?;
+        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+
+        let result = run_optimizer(vec![pred_a_lte_5, pred_a_ne_5])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("lt"),
+            "Function should be lt (less than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_column_index(&func.arguments[0]),
+                Some(0),
+                "First arg should be column A"
+            );
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(5),
+                "Second arg should be constant 5"
+            );
+        }
+    }
+
+    // Test: A != 10 AND A <= 10 => A < 10 (with different constant)
+    {
+        let pred_a_ne_10 = create_comparison(col_a.clone(), const_10.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_lte_10 = create_comparison(col_a.clone(), const_10.clone(), ComparisonOp::LTE)?;
+
+        let result = run_optimizer(vec![pred_a_ne_10, pred_a_lte_10])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("lt"),
+            "Function should be lt (less than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(10),
+                "Second arg should be constant 10"
+            );
+        }
+    }
+
+    // Test: A != 5 AND A >= 5 => A > 5
+    {
+        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_gte_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GTE)?;
+
+        let result = run_optimizer(vec![pred_a_ne_5, pred_a_gte_5])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("gt"),
+            "Function should be gt (greater than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(5),
+                "Second arg should be constant 5"
+            );
+        }
+    }
+
+    // Test: A >= 5 AND A != 5 => A > 5 (reverse order)
+    {
+        let pred_a_gte_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GTE)?;
+        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+
+        let result = run_optimizer(vec![pred_a_gte_5, pred_a_ne_5])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("gt"),
+            "Function should be gt (greater than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(5),
+                "Second arg should be constant 5"
+            );
+        }
+    }
+
+    // Test: A != 5 AND A < 5 => A < 5 (redundant NotEqual)
+    {
+        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_lt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::LT)?;
+
+        let result = run_optimizer(vec![pred_a_ne_5, pred_a_lt_5])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("lt"),
+            "Function should be lt (less than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(5),
+                "Second arg should be constant 5"
+            );
+        }
+    }
+
+    // Test: A < 5 AND A != 5 => A < 5 (redundant NotEqual, reverse order)
+    {
+        let pred_a_lt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::LT)?;
+        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+
+        let result = run_optimizer(vec![pred_a_lt_5, pred_a_ne_5])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("lt"),
+            "Function should be lt (less than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(5),
+                "Second arg should be constant 5"
+            );
+        }
+    }
+
+    // Test: A != 5 AND A > 5 => A > 5 (redundant NotEqual)
+    {
+        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+        let pred_a_gt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GT)?;
+
+        let result = run_optimizer(vec![pred_a_ne_5, pred_a_gt_5])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("gt"),
+            "Function should be gt (greater than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(5),
+                "Second arg should be constant 5"
+            );
+        }
+    }
+
+    // Test: A > 5 AND A != 5 => A > 5 (redundant NotEqual, reverse order)
+    {
+        let pred_a_gt_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::GT)?;
+        let pred_a_ne_5 = create_comparison(col_a.clone(), const_5.clone(), ComparisonOp::NotEqual)?;
+
+        let result = run_optimizer(vec![pred_a_gt_5, pred_a_ne_5])?;
+
+        assert_eq!(result.len(), 1, "Should be simplified to one predicate");
+        assert_eq!(
+            get_function_name(&result[0]),
+            Some("gt"),
+            "Function should be gt (greater than)"
+        );
+
+        if let ScalarExpr::FunctionCall(func) = &result[0] {
+            assert_eq!(
+                get_int_value(&func.arguments[1]),
+                Some(5),
+                "Second arg should be constant 5"
+            );
+        }
+    }
+
+    Ok(())
+}

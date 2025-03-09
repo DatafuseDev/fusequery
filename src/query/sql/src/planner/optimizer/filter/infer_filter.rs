@@ -289,8 +289,8 @@ impl<'a> InferFilterOptimizer<'a> {
                 ComparisonOp::LTE => match left.constant.cmp(&right.constant) {
                     std::cmp::Ordering::Greater => MergeResult::None,
                     std::cmp::Ordering::Equal => {
-                        // When GTE and LTE have the same constant, convert to Equal
-                        right.op = ComparisonOp::Equal;
+                        // When NotEqual and LTE have the same constant, convert to LT
+                        right.op = ComparisonOp::LT;
                         MergeResult::Right
                     }
                     std::cmp::Ordering::Less => MergeResult::All,
@@ -299,9 +299,14 @@ impl<'a> InferFilterOptimizer<'a> {
                     true => MergeResult::Right,
                     false => MergeResult::All,
                 },
-                ComparisonOp::GTE => match left.constant < right.constant {
-                    true => MergeResult::Right,
-                    false => MergeResult::All,
+                ComparisonOp::GTE => match left.constant.cmp(&right.constant) {
+                    std::cmp::Ordering::Less => MergeResult::Right,
+                    std::cmp::Ordering::Equal => {
+                        // When NotEqual and GTE have the same constant, convert to GT
+                        right.op = ComparisonOp::GT;
+                        MergeResult::Right
+                    }
+                    std::cmp::Ordering::Greater => MergeResult::All,
                 },
             },
             ComparisonOp::LT => match right.op {
@@ -327,9 +332,14 @@ impl<'a> InferFilterOptimizer<'a> {
                     true => MergeResult::None,
                     false => MergeResult::Right,
                 },
-                ComparisonOp::NotEqual => match left.constant < right.constant {
-                    true => MergeResult::Left,
-                    false => MergeResult::All,
+                ComparisonOp::NotEqual => match left.constant.cmp(&right.constant) {
+                    std::cmp::Ordering::Less => MergeResult::Left,
+                    std::cmp::Ordering::Equal => {
+                        // When LTE and NotEqual have the same constant, convert to LT
+                        left.op = ComparisonOp::LT;
+                        MergeResult::Left
+                    }
+                    std::cmp::Ordering::Greater => MergeResult::All,
                 },
                 ComparisonOp::LT => match left.constant < right.constant {
                     true => MergeResult::Left,
